@@ -37,12 +37,13 @@ function showToast(message){$('toast').textContent=message;$('toast').classList.
 function add(product){const existing=cart.get(product.id);cart.set(product.id,{product,qty:(existing?.qty||0)+1});renderCart();}
 function changeQty(id,delta){const x=cart.get(id);if(!x)return;const q=x.qty+delta;if(q<=0)cart.delete(id);else x.qty=q;renderCart()}
 function renderCart(){const lines=$('lines');lines.replaceChildren();let count=0;for(const [id,x] of cart){count+=x.qty;const row=document.createElement('div');row.className='line';const info=document.createElement('div');info.className='line-info';const name=document.createElement('div');name.className='line-name';name.textContent=x.product.name;const price=document.createElement('div');price.className='line-price';price.textContent=money(x.product.price)+' / шт.';info.append(name,price);const qty=document.createElement('div');qty.className='qty';const minus=document.createElement('button');minus.type='button';minus.textContent='−';minus.setAttribute('aria-label','Уменьшить количество '+x.product.name);minus.onclick=()=>changeQty(id,-1);const n=document.createElement('span');n.textContent=x.qty;const plus=document.createElement('button');plus.type='button';plus.className='plus';plus.textContent='+';plus.setAttribute('aria-label','Увеличить количество '+x.product.name);plus.onclick=()=>changeQty(id,1);qty.append(minus,n,plus);row.append(info,qty);lines.append(row)}$('count').textContent=count+' шт.';$('total').textContent=money(amount());$('pay').disabled=!cart.size;$('clear').disabled=!cart.size}
-function searchProducts(){const q=$('search').value.trim().toLowerCase();const results=$('results');results.replaceChildren();if(!q)returnconst found=products.filter(p=>[p.name,p.sku,p.barcode].some(v=>v.toLowerCase().includes(q))).slice(0,30);if(!found.length){const el=document.createElement('div');el.className='empty';el.textContent='Товар не найден';results.append(el)}for(const p of found){const row=document.createElement('button');row.className='result';const info=document.createElement('div');info.textContent=p.name;const sub=document.createElement('small');sub.textContent=p.sku+' · '+p.barcode;info.append(sub);const price=document.createElement('b');price.textContent=money(p.price);row.append(info,price);row.onclick=()=>{add(p);$('search').value='';searchProducts();$('search').focus()};results.append(row)}}
+function searchProducts(){const q=$('search').value.trim().toLowerCase();const results=$('results');results.replaceChildren();if(!q)return;const found=products.filter(p=>[p.name,p.sku,p.barcode].some(v=>v.toLowerCase().includes(q))).slice(0,30);if(!found.length){const el=document.createElement('div');el.className='empty';el.textContent='Товар не найден';results.append(el)}for(const p of found){const row=document.createElement('button');row.className='result';const info=document.createElement('div');info.textContent=p.name;const sub=document.createElement('small');sub.textContent=p.sku+' · '+p.barcode;info.append(sub);const price=document.createElement('b');price.textContent=money(p.price);row.append(info,price);row.onclick=()=>{add(p);$('search').value='';searchProducts();$('search').focus()};results.append(row)}}
 function onScan(code){const now=Date.now();if(code===lastCode&&now-lastScan<1300)return;lastCode=code;lastScan=now;const product=products.find(p=>p.barcode===code);if(product)add(product);else showToast('Нет товара: '+code)}
 // Safari remembers site permissions when the user chooses Allow. Camera auto-start is
 // attempted on every visit; if iOS requires a gesture, the fallback button appears.
 async function startCamera(){
- if(scanning||cameraStarting||cameraStopping||mode!=='scan'||document.hidden)return;
+ if(scanning||cameraStarting||mode!=='scan'||document.hidden)return;
+ if(cameraStopping){setTimeout(()=>startCamera(),400);return}
  if(!window.Html5Qrcode){$('cameraStatus').textContent='Ошибка камеры';$('cameraStatus').classList.remove('hidden');$('start').classList.remove('hidden');return}
  cameraStarting=true;
  $('start').classList.add('hidden');$('cameraStatus').classList.add('hidden');
@@ -52,20 +53,21 @@ async function startCamera(){
   scanning=true;cameraDenied=false;
   const caps=scanner.getRunningTrackCapabilities?.();
   $('torch').classList.toggle('hidden',!caps?.torch);
-  if(mode!=='scan'||document.hidden)await stopCamera();
+  if(mode!=='scan'||document.hidden){setTimeout(()=>stopCamera(),0)}
  }catch(err){
   console.warn('Camera start:',err);
   cameraDenied=true;
+  scanner=null;
+  $('reader').replaceChildren();
   $('start').classList.remove('hidden');
-  $('cameraStatus').textContent='Нет доступа к камере';
+  const msg=String(err?.message||err||'');
+  $('cameraStatus').textContent=/NotAllowed|Permission|denied/i.test(msg)?'Разрешите доступ к камере':/NotFound|Overconstrained/i.test(msg)?'Камера не найдена':'Не удалось включить камеру';
   $('cameraStatus').classList.remove('hidden');
  }finally{cameraStarting=false}
 }
 async function stopCamera(){
  if(cameraStopping)return;
- if(cameraStarting){ // Wait for the pending start without racing the camera library.
-  for(let i=0;i<30&&cameraStarting;i++)await new Promise(r=>setTimeout(r,100));
- }
+ if(cameraStarting){setTimeout(()=>stopCamera(),350);return}
  if(!scanning)return;
  cameraStopping=true;
  try{await scanner.stop()}catch(e){console.warn(e)}
@@ -92,7 +94,7 @@ $('start').onclick=()=>{cameraDenied=false;startCamera()};$('torch').onclick=tog
 $('confirmPayment').onclick=()=>{if($('confirmPayment').disabled)return;const receipt={items:[...cart.values()].map(x=>({name:x.product.name,price:x.product.price,qty:x.qty})),subtotal:amount(),discountSom:discountValue(),due:dueAmount(),method:paymentMethod,received:paymentMethod==='card'?dueAmount():Number($('received').value),change:paymentMethod==='card'?0:round(Number($('received').value)-dueAmount())};console.info('DEMO receipt, not persisted:',receipt);closePayment();cart.clear();renderCart();showToast('Тест: продажа не сохранена');if(mode==='search')setMode('scan')};
 renderCart();searchProducts();
 // Start without an extra tap when Safari permits it. Do not retry permission errors in a loop.
-window.addEventListener('load',()=>startCamera(),{once:true});
+window.addEventListener('load',()=>setTimeout(startCamera,150),{once:true});
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){stopCamera()}
  else if(mode==='scan'&&!cameraDenied){setTimeout(()=>startCamera(),200)}
